@@ -1646,8 +1646,9 @@ std::uint64_t WriteGeneration() {
     return Tracker().generation.load(std::memory_order_acquire);
 }
 
-std::uint64_t CollectWrittenBlocks(std::uint64_t address, std::size_t bytes, std::uint64_t since, std::vector<std::pair<std::uint64_t, std::uint64_t>>& written) {
+std::uint64_t CollectWrittenBlocks(std::uint64_t address, std::size_t bytes, std::uint64_t since, std::vector<std::pair<std::uint64_t, std::uint64_t>>& written, std::vector<std::pair<std::uint64_t, std::uint64_t>>* refused) {
     written.clear();
+    if (refused != nullptr) refused->clear();
     if (bytes == 0 || bytes > std::numeric_limits<std::uint64_t>::max() - address) return 0;
     auto& tracker = Tracker();
     const auto lock = lockTracker(tracker);
@@ -1666,7 +1667,9 @@ std::uint64_t CollectWrittenBlocks(std::uint64_t address, std::size_t bytes, std
     std::uint64_t spanBegin = 0;
     std::uint64_t spanEnd = 0;
     const auto walkSpan = [&] {
-        if (spanEnd > spanBegin) walkWrites(tracker, spanBegin & ~std::uint64_t{WritePageBytes - 1}, (spanEnd + WritePageBytes - 1) & ~std::uint64_t{WritePageBytes - 1}, StampKind::Cpu);
+        const auto walkBegin = spanBegin & ~std::uint64_t{WritePageBytes - 1};
+        const auto walkEnd = (spanEnd + WritePageBytes - 1) & ~std::uint64_t{WritePageBytes - 1};
+        if (spanEnd > spanBegin && !walkWrites(tracker, walkBegin, walkEnd, StampKind::Cpu) && refused != nullptr) refused->emplace_back(walkBegin, walkEnd);
         spanBegin = spanEnd = 0;
     };
     for (auto block = first; block <= last; ++block) {
