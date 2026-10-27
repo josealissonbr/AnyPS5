@@ -2277,7 +2277,9 @@ void recordDraw(const Context& context, const State& state, const Pm4::DrawParam
     if (capture) captureInputs(context, *recorder, commands, resources, drawBindings, record.targets.empty() || record.targets.front() == nullptr ? 0 : record.targets.front()->Descriptor().baseAddress);
     // The draw's [gputime] class range: from its first barrier to the pass's trailing barrier (a
     // continued draw lies inside its pass's range).
-    const auto drawTiming = !continued ? recorder->BeginGpuTiming(CommandClass::Draw) : Recorder::NoTiming;
+    static const bool timePasses = std::getenv("APS5_PROFILE_GPU_PASSES") != nullptr;
+    const std::uint64_t passTarget = record.targets.empty() || record.targets.front() == nullptr ? 1 : record.targets.front()->Descriptor().baseAddress;
+    const auto drawTiming = !continued ? (timePasses ? recorder->BeginGpuTiming(passTarget | (std::uint64_t{1} << 62u)) : recorder->BeginGpuTiming(CommandClass::Draw)) : Recorder::NoTiming;
     if (!continued && Recorder::BarrierValidate()) {
         auto reads = resources.InPlaceReads();
         reads.insert(reads.end(), inputs.inPlaceReads.begin(), inputs.inPlaceReads.end());
@@ -2356,6 +2358,12 @@ void recordDraw(const Context& context, const State& state, const Pm4::DrawParam
         std::uint64_t key = 0;
         for (const auto& shader : shaders) {
             if (shader.program != nullptr && (key == 0 || shader.stage == ShaderRecompiler::ShaderStage::Fragment)) key = shader.program->variantId;
+        }
+        static std::mutex seenMutex;
+        static std::set<std::uint64_t> seen;
+        {
+            std::lock_guard lock(seenMutex);
+            if (seen.insert(key).second) std::fprintf(stderr, "[pass-draw] variant 0x%llx target 0x%llx extent %ux%u samples %u\n", static_cast<unsigned long long>(key), static_cast<unsigned long long>(record.targets.empty() || record.targets.front() == nullptr ? 0 : record.targets.front()->Descriptor().baseAddress), state.renderExtent.width, state.renderExtent.height, state.samples);
         }
         eachDrawTiming = recorder->BeginInPassGpuTiming(Recorder::DrawTimingKey(key));
     }
