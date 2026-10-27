@@ -14,6 +14,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <span>
 #include <string>
 #include <vector>
@@ -78,6 +79,7 @@ private:
     std::string header() const;
     std::vector<Range> committedRanges();
     std::vector<Range> newRanges();
+    std::vector<std::uint64_t> untrackedPages() const;
 
     std::filesystem::path directory;
     std::filesystem::path trigger;
@@ -91,6 +93,7 @@ private:
     std::vector<Range> ranges;
     std::map<std::uint64_t, std::uint64_t> shaderMarks;
     std::map<std::uint64_t, std::uint64_t> hostPageHashes;
+    std::set<std::uint64_t> refusedPages;
     std::mutex displayMutex;
     std::map<std::uint64_t, DisplayBuffer> displayBuffers;
     std::uint64_t ordinal = 0;

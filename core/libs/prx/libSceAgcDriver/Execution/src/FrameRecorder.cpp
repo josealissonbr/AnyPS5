@@ -327,9 +327,25 @@ void FrameRecorder::emitDelta() {
     }
     const auto mark = GuestMemory::WriteGeneration();
     const auto added = newRanges();
-    writeDelta(spans, {}, added);
+    const auto untracked = untrackedPages();
+    writeDelta(spans, untracked, added);
     generation = mark;
     shaderMarks.clear();
+}
+
+std::vector<std::uint64_t> FrameRecorder::untrackedPages() const {
+    std::vector<std::uint64_t> pages;
+    for (const auto& range : ranges) {
+        if ((range.kind != FrameRangeKind::Watched && range.kind != FrameRangeKind::Unwatched) || !range.readable) continue;
+        const auto end = range.address + range.bytes;
+        for (auto block = range.address & ~std::uint64_t{FrameCaptureWriter::BlockBytes - 1}; block < end; block += FrameCaptureWriter::BlockBytes) {
+            const auto begin = std::max(range.address, block);
+            const auto stop = std::min<std::uint64_t>(end, block + FrameCaptureWriter::BlockBytes);
+            if (GuestMemory::Watched(begin, static_cast<std::size_t>(stop - begin))) continue;
+            for (auto page = begin & ~std::uint64_t{HostPageBytes - 1}; page < stop; page += HostPageBytes) pages.push_back(page);
+        }
+    }
+    return pages;
 }
 
 std::vector<FrameRecorder::Range> FrameRecorder::newRanges() {
@@ -406,10 +422,16 @@ void FrameRecorder::writeDelta(std::span<const Span> spans, std::span<const std:
     if (abandonIfDiskLow()) return;
     std::vector<std::pair<std::uint64_t, std::uint64_t>> blocks;
     std::vector<std::pair<std::uint64_t, std::uint64_t>> written;
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> refused;
+    std::set<std::uint64_t> compared(hostPages.begin(), hostPages.end());
     for (const auto& span : spans) {
-        GuestMemory::CollectWrittenBlocks(span.address, static_cast<std::size_t>(span.bytes), span.since, written);
+        GuestMemory::CollectWrittenBlocks(span.address, static_cast<std::size_t>(span.bytes), span.since, written, &refused);
         blocks.insert(blocks.end(), written.begin(), written.end());
+        for (const auto& [begin, end] : refused) {
+            for (auto page = begin; page < end; page += HostPageBytes) refusedPages.insert(page);
+        }
     }
+    compared.insert(refusedPages.begin(), refusedPages.end());
     auto& driver = DriverDetail::Driver::Get();
     auto [accepted, completed] = driver.SerialProgress();
     if (completed < accepted && (!added.empty() || !blocks.empty())) {
@@ -442,7 +464,7 @@ void FrameRecorder::writeDelta(std::span<const Span> spans, std::span<const std:
             at += bytes.size();
         }
     }
-    for (const auto page : hostPages) {
+    for (const auto page : compared) {
         if (!GuestMemory::Accessible(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(page)), HostPageBytes)) continue;
         bytes.resize(HostPageBytes);
         std::memcpy(bytes.data(), reinterpret_cast<const void*>(static_cast<std::uintptr_t>(page)), HostPageBytes);
@@ -524,14 +546,29 @@ void FrameRecorder::start() {
     ranges = committedRanges();
     writer = std::make_unique<FrameCaptureWriter>(directory);
     std::vector<std::pair<std::uint64_t, std::uint64_t>> written;
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> refused;
     for (const auto& range : ranges) {
-        if (range.kind == FrameRangeKind::Watched || range.kind == FrameRangeKind::Unwatched) GuestMemory::CollectWrittenBlocks(range.address, static_cast<std::size_t>(range.bytes), std::numeric_limits<std::uint64_t>::max(), written);
+        if (range.kind != FrameRangeKind::Watched && range.kind != FrameRangeKind::Unwatched) continue;
+        GuestMemory::CollectWrittenBlocks(range.address, static_cast<std::size_t>(range.bytes), std::numeric_limits<std::uint64_t>::max(), written, &refused);
+        for (const auto& [begin, end] : refused) {
+            for (auto page = begin; page < end; page += HostPageBytes) refusedPages.insert(page);
+        }
     }
     generation = GuestMemory::WriteGeneration();
     for (const auto& range : ranges) {
         snapshot(range);
         if (!writer) return;
     }
+    auto compared = untrackedPages();
+    const auto untrackedCount = compared.size();
+    compared.insert(compared.end(), refusedPages.begin(), refusedPages.end());
+    std::vector<std::byte> page(HostPageBytes);
+    for (const auto at : compared) {
+        if (!GuestMemory::Accessible(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(at)), HostPageBytes)) continue;
+        std::memcpy(page.data(), reinterpret_cast<const void*>(static_cast<std::uintptr_t>(at)), HostPageBytes);
+        hostPageHashes[at] = contentHash(page);
+    }
+    std::fprintf(stderr, "[frame-capture] compared at every call: %.1f MiB not write-tracked, %.1f MiB whose write walk was refused\n", static_cast<double>(untrackedCount * HostPageBytes) / (1024.0 * 1024.0), static_cast<double>(refusedPages.size() * HostPageBytes) / (1024.0 * 1024.0));
     for (const auto& call : prologue) writer->WriteCall(call);
     std::uintptr_t ringBase = 0;
     std::uint32_t ringSize = 0;
