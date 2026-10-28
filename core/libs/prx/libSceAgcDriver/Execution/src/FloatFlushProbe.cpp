@@ -2,6 +2,8 @@
 #include "prx/libSceAgcDriver/Execution/include/VulkanDevice.hpp"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <array>
 #include <optional>
 #include <span>
@@ -176,7 +178,13 @@ FloatFlushProbeResult ProbeFloat32FlushToZero(VulkanDevice& device, const Shader
             const auto hardware = Run(device, target, true, mode, code, rows);
             for (std::size_t index = 0; index < software.size(); ++index) {
                 ++result.compared;
-                if (software[index] != hardware[index] && !(IsNan(software[index]) && IsNan(hardware[index]))) ++result.mismatches;
+                if (software[index] != hardware[index] && !(IsNan(software[index]) && IsNan(hardware[index]))) {
+                    ++result.mismatches;
+                    if (std::getenv("APS5_TRACE_F32_PROBE") != nullptr) {
+                        const auto thread = index / Results;
+                        std::fprintf(stderr, "[f32-probe] program %zu mode %zu thread %zu result %zu inputs %08x %08x %08x software %08x hardware %08x\n", static_cast<std::size_t>(&code == &programs[0].first ? 0 : &code == &programs[1].first ? 1 : 2), static_cast<std::size_t>(&mode - modes.data()), thread, index % Results, rows[thread][0], rows[thread][1], rows[thread][2], software[index], hardware[index]);
+                    }
+                }
             }
         }
     }

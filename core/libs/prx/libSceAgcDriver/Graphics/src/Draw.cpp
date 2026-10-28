@@ -2367,16 +2367,33 @@ void recordDraw(const Context& context, const State& state, const Pm4::DrawParam
         }
         eachDrawTiming = recorder->BeginInPassGpuTiming(Recorder::DrawTimingKey(key));
     }
-    if (record.stencilReplay.empty()) recordDrawCommands(context, commands, state, draw, inputs, record.indirect, argumentBuffer, argumentOffset, trace, subdraw);
+    static const std::set<std::uint64_t> skippedVariants = [] {
+        std::set<std::uint64_t> variants;
+        if (const char* text = std::getenv("APS5_SKIP_DRAW_TARGETS")) {
+            for (char* end = nullptr; *text != '\0'; text = *end == ',' ? end + 1 : end) {
+                variants.insert(std::strtoull(text, &end, 16));
+                if (end == text) break;
+            }
+        }
+        return variants;
+    }();
+    bool skipped = skippedVariants.contains(passTarget);
+    if (false) {
+        for (const auto& shader : shaders) {
+            if (shader.program != nullptr && shader.stage == ShaderRecompiler::ShaderStage::Fragment && skippedVariants.contains(shader.program->variantId)) skipped = true;
+        }
+    }
+    if (skipped) {
+    } else if (record.stencilReplay.empty()) recordDrawCommands(context, commands, state, draw, inputs, record.indirect, argumentBuffer, argumentOffset, trace, subdraw);
     else {
         recordStencilReplay(context, commands, state, draw, inputs, record.stencilReplay, shaders, resources, record.pushBytes, record.pushStages);
         for (const auto& [reference, pipeline] : record.stencilReplay) recorder->Keep(pipeline);
     }
-    if (record.pipeline->SplitsFaces()) {
+    if (!skipped && record.pipeline->SplitsFaces()) {
         record.pipeline->ContinueBackFaces(commands, state);
         recordDrawCommands(context, commands, state, draw, inputs, record.indirect, argumentBuffer, argumentOffset, trace, subdraw);
     }
-    if (record.pipeline->SplitsSecondChannel()) {
+    if (!skipped && record.pipeline->SplitsSecondChannel()) {
         record.pipeline->ContinueSecondChannel(commands);
         recordDrawCommands(context, commands, state, draw, inputs, record.indirect, argumentBuffer, argumentOffset, trace, subdraw);
     }

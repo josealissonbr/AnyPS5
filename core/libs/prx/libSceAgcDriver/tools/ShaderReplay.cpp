@@ -48,6 +48,7 @@ bool g_materialize = false;
 bool g_graph = false;
 bool g_maintenance8 = false;
 bool g_robust2 = false;
+bool g_f32Flush = false;
 bool g_waveLdsMemoryBarriers = false;
 bool g_deviceScopeLdsMemoryBarriers = false;
 bool g_code = false;
@@ -149,6 +150,7 @@ bool Replay(const char* path) {
     try {
         if (g_maintenance8) request.request.target.nonConstantImageOffsets = true;
         if (g_robust2) request.request.target.robustBufferAccess2 = true;
+        if (g_f32Flush) request.request.target.float32FlushToZero = true;
         if (g_waveLdsMemoryBarriers) request.request.target.waveLdsMemoryBarriers = true;
         if (g_deviceScopeLdsMemoryBarriers) request.request.target.deviceScopeLdsMemoryBarriers = true;
         const auto result = ShaderRecompiler::Recompile(request.request);
@@ -207,6 +209,10 @@ int main(int argc, char** argv) {
         }
         if (std::string(argv[i]) == "--maintenance8") {
             g_maintenance8 = true;
+            continue;
+        }
+        if (std::string(argv[i]) == "--f32-flush") {
+            g_f32Flush = true;
             continue;
         }
         if (std::string(argv[i]) == "--robust2") {

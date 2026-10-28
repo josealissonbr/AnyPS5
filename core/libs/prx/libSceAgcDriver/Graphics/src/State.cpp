@@ -16,6 +16,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <limits>
+#include <mutex>
+#include <set>
 #include <span>
 #include <array>
 #include <sstream>
@@ -1456,6 +1458,15 @@ void ApplyDepthRemap(const Context& context, State& state) {
 State DecodeState(const QueueState& queue, bool vertexWorkgroup) {
     if (auto reason = DepthMaintenanceRejection(queue); !reason.empty()) throw std::runtime_error(reason);
     const auto& cx = queue.context;
+    if (static const bool traceVrs = std::getenv("APS5_TRACE_VRS_REGISTERS") != nullptr; traceVrs) {
+        const auto value = [&](std::uint32_t offset) { const auto found = find(cx, offset); return found == cx.end() ? 0xffffffffu : found->second; };
+        const std::array<std::uint32_t, 6> registers{value(0x212), value(0x019), value(0x0f4), value(0x0f5), value(0x0f6), value(0x0f7)};
+        static std::mutex seenMutex;
+        static std::set<std::pair<std::uint32_t, std::array<std::uint32_t, 6>>> seen;
+        const auto target = value(0x318);
+        std::lock_guard lock(seenMutex);
+        if (seen.insert({target, registers}).second) std::fprintf(stderr, "[vrs] cb0 base 0x%08x PA_CL_VRS_CNTL 0x%08x DB_VRS_OVERRIDE_CNTL 0x%08x PA_SC_VRS_OVERRIDE_CNTL 0x%08x f5 0x%08x f6 0x%08x f7 0x%08x\n", target, registers[0], registers[1], registers[2], registers[3], registers[4], registers[5]);
+    }
     State result{};
     result.conservativeRasterization = decodeConservativeRasterization(queue);
     result.stages = DecodeShaderStages(queue, vertexWorkgroup);
